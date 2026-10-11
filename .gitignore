@@ -39,3 +39,12 @@ venv/
 *.msi
 *.zip
 *.bundle
+
+# Portable installation for this computer
+.runtime/
+generated/
+style-examples/
+
+# Private upgrade snapshots and local dependency lock
+work/upgrade-backup-*/
+requirements.local.lock.txt

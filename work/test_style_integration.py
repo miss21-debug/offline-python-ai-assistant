@@ -42,7 +42,7 @@ class StyleIntegrationTests(unittest.TestCase):
             ai.MODEL_MODE = "7b"
             ai.ask("打印你好", style_examples=True)
         self.assertEqual([c["model"] for c in self.calls],
-                         [ai.MODEL_NAMES["3b"], ai.MODEL_NAMES["7b"], ai.MODEL_NAMES["7b"]])
+                         [ai.MODEL_NAMES["7b"], ai.MODEL_NAMES["14b"], ai.MODEL_NAMES["7b"]])
         for call in self.calls:
             system = call["messages"][0]["content"]
             self.assertIn("<style_examples>", system)

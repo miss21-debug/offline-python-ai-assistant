@@ -23,6 +23,7 @@ if os.name == "nt":
             pass
 
 MODEL_NAMES = {
+    "14b": "qwen3:14b",
     "3b": "qwen2.5-coder:3b",
     "7b": "qwen2.5-coder:7b",
 }
@@ -179,13 +180,13 @@ def choose_model(prompt: str, system: str = "") -> str:
         "docx", ".pdf", ".pptx", "截图", "多步骤", "完整项目", "数据泄漏",
     )
     if len(text) >= 700 or text.count("\n") >= 8 or any(marker in text for marker in complex_markers):
-        return MODEL_NAMES["7b"]
-    return MODEL_NAMES["3b"]
+        return MODEL_NAMES["14b"]
+    return MODEL_NAMES["7b"]
 
 
 def model_mode_description() -> str:
     if MODEL_MODE == "auto":
-        return "自动选择（简单任务 3B，复杂任务 7B）"
+        return "自动选择（简单任务 7B，复杂任务 14B）"
     return f"手动固定 {MODEL_MODE.upper()}（{MODEL_NAMES[MODEL_MODE]}）"
 
 
@@ -199,7 +200,7 @@ def ask(prompt: str, system: str = "", model: str | None = None, *, style_exampl
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    body = json.dumps({"model": selected_model, "stream": False, "messages": messages}).encode()
+    body = json.dumps({"model": selected_model, "stream": False, "think": False, "options": {"num_ctx": 8192, "num_predict": 4096, "temperature": 0.1}, "messages": messages}).encode()
     req = urllib.request.Request(OLLAMA_URL, data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=600) as response:
@@ -271,8 +272,9 @@ def show_help() -> None:
   /files                     列出项目中的 Python 文件
   /model                    显示模型模式和当前选择结果
   /model 3b                 固定使用快速 3B 模型
-  /model 7b                 固定使用更精细的 7B 模型
-  /model auto               自动选择（简单任务 3B，复杂任务 7B）
+  /model 7b                 固定使用快速代码模型
+  /model 14b                固定使用高质量 Qwen3 14B 模型
+  /model auto               自动选择（简单任务 7B，复杂任务 14B）
   /help                     显示帮助
   /quit                     退出
 
@@ -335,37 +337,13 @@ def append_pptx_result(source: Path, output: Path, result: str) -> None:
     prs.save(output)
 
 
-def append_pdf_result(source: Path, output: Path, result: str) -> None:
-    from pypdf import PdfReader, PdfWriter
-    from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.units import mm
-    import tempfile
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp: temp_path = Path(tmp.name)
-    c = canvas.Canvas(str(temp_path), pagesize=A4); width, height = A4
-    c.setFont("Helvetica", 16); c.drawString(20 * mm, height - 25 * mm, "AI 完成结果")
-    c.setFont("Helvetica", 10); y = height - 38 * mm
-    for line in result[:18000].splitlines():
-        if y < 18 * mm: c.showPage(); c.setFont("Helvetica", 10); y = height - 18 * mm
-        c.drawString(20 * mm, y, line[:95]); y -= 5 * mm
-    c.save(); writer = PdfWriter()
-    for page in PdfReader(str(source)).pages: writer.add_page(page)
-    for page in PdfReader(str(temp_path)).pages: writer.add_page(page)
-    with output.open("wb") as f: writer.write(f)
-    temp_path.unlink(missing_ok=True)
+def append_pdf_result(source, output, result):
+    from quality_upgrade import append_pdf
+    append_pdf(source, output, result)
 
-
-def save_document_result(source: Path, instruction: str) -> None:
-    text = extract_document(source)
-    if not text.strip(): raise ValueError("文件中没有提取到文字；扫描版 PDF 需要先 OCR")
-    prompt = (f"请阅读以下 {source.suffix} 文件内容，并根据用户要求处理。\n用户要求：{instruction}\n"
-              "先简要说明题目或文档要点，再给出完整、准确、可执行的结果。\n文件内容：\n" + text[:60000])
-    system = "你是离线中文文档处理助手。请完成文档题目；涉及 Python 时给出完整代码；不确定内容标注待核实。"
-    result = ask(prompt, system); output = document_output(source)
-    if source.suffix.lower() == ".docx": append_docx_result(source, output, result)
-    elif source.suffix.lower() == ".pptx": append_pptx_result(source, output, result)
-    else: append_pdf_result(source, output, result)
-    print(f"已读取并处理文件，结果已保存为：{output.relative_to(ROOT)}")
+def save_document_result(source, instruction):
+    from quality_upgrade import generate_document
+    generate_document(sys.modules[__name__], source, instruction)
 
 
 def natural_document_request(raw: str) -> tuple[Path, str] | None:
@@ -436,10 +414,11 @@ def save_generated_file(path: Path, task: str, old: str = "") -> None:
               "科研代码要固定随机种子、避免数据泄漏、清楚划分训练/验证/测试集，报告关键指标，并记录配置；缺少数据时使用清晰的占位路径并说明。\n"
               "优先使用标准库和当前环境已有依赖；如果必须新增依赖，在代码注释中写明包名和安装命令。")
     result = code_only(ask(prompt, system, style_examples=True))
+    result = code_only(ask("逐条复核题目约束、算法、输入校验、边界和输出格式；修正错误，只输出完整Python源码。不要声称执行过代码。\n题目：" + task + "\n候选源码：" + result, system, style_examples=True))
     if any(ord(ch) > 127 for ch in result) and "coding" not in result.splitlines()[0].lower():
         result = "# -*- coding: utf-8 -*-\n" + result
     if path.exists():
-        path.with_suffix(path.suffix + ".bak").write_text(old, encoding="utf-8")
+        path.with_suffix(path.suffix + ".bak").write_bytes(path.read_bytes())
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(result, encoding="utf-8")
 
@@ -500,7 +479,7 @@ def main() -> int:
                 MODEL_MODE = requested
                 print(f"已切换为：{model_mode_description()}")
             else:
-                print("可选模型：/model 3b、/model 7b、/model auto")
+                print("可选模型：/model 3b、/model 7b、/model 14b、/model auto")
             continue
         if raw == "/files":
             for p in sorted(ROOT.rglob("*.py")):

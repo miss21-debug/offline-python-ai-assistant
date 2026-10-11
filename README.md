@@ -6,7 +6,7 @@
 
 ## 功能
 
-- Qwen2.5-Coder 3B / 7B：手动选择，或按关键词和请求长度自动选择。3B 较快，7B 通常更适合复杂代码。
+- Qwen3 14B（质量优先）与 Qwen2.5-Coder 3B / 7B：手动选择，或按关键词和请求长度自动选择。3B 较快，7B 通常更适合复杂代码。
 - 自然语言生成 `.py` 文件、修改和审查代码，覆盖时备份为 `.bak`。
 - 本地截图通过 Qwen2.5-VL 3B 转写题目，再交给代码模型生成文件。
 - 读取 Word / PDF / PPT 的文字，将回答追加到 `_AI完成` 副本。
@@ -22,6 +22,7 @@
 python -m pip install -r requirements.txt
 ollama pull qwen2.5-coder:3b
 ollama pull qwen2.5-coder:7b
+ollama pull qwen3:14b
 ollama pull qwen2.5vl:3b
 ```
 
@@ -42,6 +43,7 @@ ollama pull qwen2.5vl:3b
 ```text
 /model 3b
 /model 7b
+/model 14b
 /model auto
 /fix calculator.py 修复除零错误
 /review calculator.py
@@ -101,3 +103,12 @@ python work/verify_style_result.py
 仓库不包含个人截图、实验代码、报告、账号凭据、本机配置、模型权重或安装包。本地示例仅读取，不执行；默认请求地址为 `127.0.0.1:11434`。修改 `OLLAMA_URL` 后，请求会发送到你配置的地址。生成程序的联网行为取决于其代码。
 
 本项目代码使用 [MIT License](LICENSE)。[Ollama](https://github.com/ollama/ollama)、Continue 和 [Qwen2.5-Coder](https://github.com/QwenLM/Qwen2.5-Coder) / [Qwen2.5-VL](https://github.com/QwenLM/Qwen2.5-VL) 各自遵循其许可证。
+
+## 本次升级
+
+- 自动路由：简单任务7B，复杂任务14B；启动脚本默认14B。14B需要较多显存，可用 `/model 7b` 切换。
+- 文档按编号逐题生成并复核，每题保存独立 `.py`、`answers.md` 和 `validation.json`。编号识别适用于独立行的1.、1）等格式。
+- 单文件生成增加第二次模型复核；语法通过不代表逻辑正确，生成代码不会自动执行。
+- PDF使用Windows黑体，自动换行分页，不再按字符数截断；图片和扫描内容仍需单独转写。
+- 当前便携启动入口依赖 `.venv/Scripts/python.exe` 和 `.runtime/ollama/ollama.exe`，也可在已安装Ollama的环境直接运行 `python local_python_ai.py`。
+- 默认请求参数为8192上下文、温度0.1、4096输出token，Qwen3关闭思考输出。
