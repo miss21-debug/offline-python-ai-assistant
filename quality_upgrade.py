@@ -1,20 +1,18 @@
-import ast
 import json
-import re
 import tempfile
 from pathlib import Path
-
-def split_questions(text):
-    text=re.sub(r"\[第 \d+ 页\]", "", text)
-    matches=list(re.finditer(r"(?m)^\s*(\d{1,2})\s*[.．、）)]\s*",text))
-    if len(matches)<2: return [(1,text)]
-    return [(int(m.group(1)),text[m.end():matches[i+1].start() if i+1<len(matches) else len(text)].strip()) for i,m in enumerate(matches)]
+from code_quality import syntax_error, validation_error
+from question_parser import split_questions
+from generation_pipeline import GenerationError, generate_checked_source
+from source_storage import atomic_write, save_source, snapshot
 
 def validate_python(code):
-    try: ast.parse(code)
-    except SyntaxError as e: return str(e)
+    return validation_error(code)
 
 def generate_document(ai,source,instruction):
+    if source.suffix.lower() == ".pdf":
+        from pdf_source import generate_pdf_sources
+        return generate_pdf_sources(ai, source, instruction)
     text=ai.extract_document(source)
     if not text.strip(): raise ValueError("没有提取到文字；扫描件需要先转写。")
     output=ai.document_output(source)
@@ -26,21 +24,31 @@ def generate_document(ai,source,instruction):
         parts=[]; report=[]; questions=split_questions(text)
         for number,question in questions:
             print(f"正在生成并复核第 {number} 题（共 {len(questions)} 题）...",flush=True)
-            draft=ai.ask(f"用户要求：{instruction}\n仅完成这道题，输出简短说明和完整Python代码块：\n{question}",system)
-            result=ai.ask(f"独立复核全部约束、算法、输入校验、边界及格式，修正候选答案。仅输出最终说明和完整Python代码块。\n用户要求：{instruction}\n题目：{question}\n候选答案：{draft}",system)
-            code=ai.code_only(result); error=validate_python(code)
-            if error:
-                code=ai.code_only(ai.ask(f"修复语法错误，只输出完整Python源码。\n题目：{question}\n错误：{error}\n源码：{code}",system))
-                error=validate_python(code); result="```python\n"+code+"```"
             path=folder/f"{number:02d}_answer.py"
-            if path.exists(): path.with_suffix(".py.bak").write_bytes(path.read_bytes())
-            path.write_text(code,encoding="utf-8")
-            status="语法通过；逻辑经模型复核，未执行" if not error else "语法未通过："+error
+            code=''; error=None
+            try:
+                expected=snapshot(path)
+                code=generate_checked_source(ai.ask,
+                    f"用户要求：{instruction}\n仅完成这道题，输出完整Python源码：\n{question}",
+                    instruction+'\n'+question,system,path)
+                save_source(path,code,expected)
+            except (OSError,ValueError,RuntimeError) as exc:
+                error=str(exc)
+                if isinstance(exc,GenerationError): code=exc.code
+                diagnostic=path.with_suffix(".py.failed.txt")
+                atomic_write(diagnostic,error+"\n\n"+code)
+                result="本题代码检查未通过，需修正："+error
+            else:
+                path.with_suffix('.py.failed.txt').unlink(missing_ok=True)
+                result="```python\n"+code+"```"
+            status="语法、名称、完整性和依赖检查通过；逻辑经模型复核，未执行" if not error else "代码检查未通过："+error
             parts.append(f"第 {number} 题\n{result}\n检查状态：{status}")
-            report.append(dict(question=number,source=path.name,syntax_error=error,executed=False))
+            report.append(dict(question=number,source=path.name if not error else None,
+                               syntax_error=syntax_error(code) if code else None,validation_error=error,
+                               checks=["syntax","undefined_names","dependencies","implementation"],executed=False))
+            atomic_write(folder/'validation.json',json.dumps(report,ensure_ascii=False,indent=2))
         result="\n\n".join(parts)
-        (folder/"answers.md").write_text(result,encoding="utf-8")
-        (folder/"validation.json").write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
+        atomic_write(folder/'answers.md',result)
         print(f"独立源码和检查记录：{folder}")
     if output.exists(): output.with_suffix(output.suffix+".bak").write_bytes(output.read_bytes())
     if source.suffix.lower()==".pdf": append_pdf(source,output,result)

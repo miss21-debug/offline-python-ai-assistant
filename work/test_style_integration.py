@@ -56,7 +56,9 @@ class StyleIntegrationTests(unittest.TestCase):
         self.assertEqual(ai.style_instructions(True), "")
         with patch.object(ai.urllib.request, "urlopen", side_effect=self.response):
             ai.ask("打印你好", style_examples=True)
-        self.assertEqual(len(self.calls[0]["messages"]), 1)
+        self.assertEqual(self.calls[0]["messages"][-1]["content"], "打印你好")
+        self.assertNotIn("用户偏好的 Python 代码风格", self.calls[0]["messages"][0]["content"])
+        self.assertIn("不是用户任务", self.calls[0]["messages"][0]["content"])
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(ai.handle_style_request("按我的代码风格写"))
         with tempfile.TemporaryDirectory() as temp:

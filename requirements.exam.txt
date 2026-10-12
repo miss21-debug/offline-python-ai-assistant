@@ -1,0 +1,8 @@
+# turtle is part of Python; it requires Tk support.
+jieba==0.42.1
+matplotlib==3.11.2
+numpy==2.5.4
+opencv-python==5.0.0.93
+pandas==3.0.6
+wordcloud==1.9.6
+pyflakes==3.4.0

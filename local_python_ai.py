@@ -12,6 +12,12 @@ import mimetypes
 import urllib.request
 import urllib.error
 from pathlib import Path
+from exam_environment import environment_prompt, print_libraries
+from source_storage import atomic_write, save_source, snapshot
+from generation_pipeline import GenerationError, generate_checked_source
+from model_transport import request_chat
+from command_arguments import first_argument, argument_list
+from natural_codegen import is_coding_request, is_save_followup, named_file, new_default_path
 
 # Windows 命令行默认可能使用 GBK；强制使用 UTF-8，避免中文显示乱码。
 if os.name == "nt":
@@ -169,7 +175,7 @@ def handle_style_request(raw: str) -> bool:
 
 
 def choose_model(prompt: str, system: str = "") -> str:
-    """Choose a local code model; auto mode uses 3B for short tasks and 7B for complex ones."""
+    """Choose 7B for short tasks and 14B for complex ones in auto mode."""
     if MODEL_MODE in MODEL_NAMES:
         return MODEL_NAMES[MODEL_MODE]
     # 只根据用户任务判断复杂度；通用系统提示词中包含“科研”等词，不能让所有任务都误切到 7B。
@@ -192,6 +198,9 @@ def model_mode_description() -> str:
 
 def ask(prompt: str, system: str = "", model: str | None = None, *, style_examples: bool = False) -> str:
     selected_model = model or choose_model(prompt, system)
+    runtime_note = environment_prompt()
+    if runtime_note:
+        system = (system + "\n\n" + runtime_note).strip()
     # Style examples must not influence model routing or displace the current task.
     style = style_instructions(include_examples=style_examples)
     if style:
@@ -200,18 +209,9 @@ def ask(prompt: str, system: str = "", model: str | None = None, *, style_exampl
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    body = json.dumps({"model": selected_model, "stream": False, "think": False, "options": {"num_ctx": 8192, "num_predict": 4096, "temperature": 0.1}, "messages": messages}).encode()
-    req = urllib.request.Request(OLLAMA_URL, data=body, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=600) as response:
-            data = json.load(response)
-    except urllib.error.URLError as exc:
-        reason = getattr(exc, "reason", exc)
-        raise RuntimeError(
-            "无法连接本地 Ollama（127.0.0.1:11434）。请重新运行 start_local_python_ai.cmd；"
-            "如果仍失败，请在命令行执行 ollama serve。详细原因：" + str(reason)
-        ) from exc
-    return data["message"]["content"]
+    payload = {"model": selected_model, "stream": False, "think": False,
+               "options": {"num_ctx": 8192, "num_predict": 4096, "temperature": 0.1}, "messages": messages}
+    return request_chat(OLLAMA_URL, payload, urllib.request.urlopen)
 
 
 def ask_image(prompt: str, image_path: Path) -> str:
@@ -222,23 +222,17 @@ def ask_image(prompt: str, image_path: Path) -> str:
     media_type = mimetypes.guess_type(image_path.name)[0] or "image/png"
     # Ollama expects base64 image data in the images array; the MIME type is not needed.
     del media_type
-    body = json.dumps({
+    payload = {
         "model": "qwen2.5vl:3b",
         "stream": False,
         "messages": [{"role": "user", "content": prompt, "images": [encoded]}],
-    }).encode()
-    req = urllib.request.Request(OLLAMA_URL, data=body, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=600) as response:
-            data = json.load(response)
-    except urllib.error.URLError as exc:
-        raise RuntimeError("无法连接本地视觉模型 qwen2.5vl:3b，请确认 Ollama 正在运行。") from exc
-    return data["message"]["content"]
+    }
+    return request_chat(OLLAMA_URL, payload, urllib.request.urlopen)
 
 
 def code_only(text: str) -> str:
-    blocks = re.findall(r"```(?:python|py)?\s*\n(.*?)```", text, flags=re.I | re.S)
-    return (max(blocks, key=len) if blocks else text).strip() + "\n"
+    from code_quality import extract_python
+    return extract_python(text)
 
 
 def syntax_error(path: Path) -> str | None:
@@ -256,6 +250,12 @@ def syntax_error(path: Path) -> str | None:
     return (result.stderr or result.stdout).strip()
 
 
+def static_code_errors(path: Path) -> str | None:
+    """Catch undefined names such as ``turtle`` when ``import turtle`` is missing."""
+    from code_quality import validation_error
+    return validation_error(path.read_text(encoding="utf-8-sig"))
+
+
 def show_help() -> None:
     print("""\n命令：
   /write 文件.py 需求       根据需求生成完整 Python 文件并保存
@@ -267,8 +267,12 @@ def show_help() -> None:
   /style                     查看当前使用的代码风格参考目录
   /style on/off              本次窗口启用/关闭代码风格模仿
   /read 文件.py              显示文件内容并加入当前问题
-  /文档 文件.docx 指令       读取 Word/PDF/PPT，并将结果保存为新文件
+  /文档 "题目.pdf" 指令     读取 PDF 题目，逐题保存为 .py 源码
+  /文档 文件.docx 指令       读取 Word/PPT，并将结果保存为新文件
   /run 文件.py [参数...]     用当前 Python 运行文件
+  /check "文件.py"          不运行程序，检查语法、未定义名称和依赖
+  /libs                      显示考试库版本和运行解释器
+  /new                       清空当前窗口的代码上下文
   /files                     列出项目中的 Python 文件
   /model                    显示模型模式和当前选择结果
   /model 3b                 固定使用快速 3B 模型
@@ -280,16 +284,21 @@ def show_help() -> None:
 
 直接输入问题即可与本地模型对话。模型不会访问互联网；只有你执行 /run 时才会运行本机代码。
 想让代码直接保存，请使用 `/生成 文件名.py 需求`；代码会写入当前项目目录，不只显示在对话框中。
+也可以直接说“用turtle库，并绘制五角星图案”，自动生成 .py；说“生成py文件给我”会保存当前窗口上一段代码。
+保存跟随当前窗口的代码上下文；重启后请重新输入题目，或先用 /read "文件.py" 读取需要保存的源码。
 也可以直接说“把这道题的代码保存到桌面”，会保存为桌面的 `generated_program.py`；说出 `保存为 xxx.py` 可指定文件名。
 也可以直接说“把代码保存到本地”“把这道题的代码保存到桌面”，或“读取题目.docx 并完成题目”。
-前者会保存 Python 文件，后者会生成 `题目_AI完成.docx`。
-模型可以随时切换；自动模式会根据任务复杂度选择 3B 或 7B。
+前者会保存 Python 文件，Word 会生成 `题目_AI完成.docx`。
+直接粘贴或拖入 PDF 题目路径即可生成 .py；多题保存在输出目录的“原文件名_源码”文件夹。
+模型可以随时切换；自动模式会根据任务复杂度选择 7B 或 14B。
 默认按你的代码风格生成；也可以直接输入“查看我的代码风格”或“关闭代码风格模仿”。
 """)
 
 
 def read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    import tokenize
+    with tokenize.open(path) as stream:
+        return stream.read()
 
 
 def extract_document(path: Path) -> str:
@@ -347,35 +356,46 @@ def save_document_result(source, instruction):
 
 
 def natural_document_request(raw: str) -> tuple[Path, str] | None:
-    if not any(word in raw for word in ("读取", "完成", "解答", "回答", "处理", "修改", "分析", "提取")): return None
-    match = re.search(r"([^\s\"“”]+\.(?:docx|pdf|pptx))", raw, flags=re.I)
-    if not match: return None
-    candidate = match.group(1)
-    candidate = re.sub(r"^(?:请)?(?:读取|打开|分析|处理|完成|修改|提取)(?:文件)?", "", candidate)
-    return (safe_path(candidate), raw) if candidate else None
+    from pdf_source import parse_document_request
+    return parse_document_request(raw, ROOT)
 
 
 def natural_file_request(raw: str) -> tuple[Path, str] | None:
-    """识别自然语言中的 Python 文件生成请求。"""
-    text = raw.strip()
-    if any(word in text for word in ("什么是", "如何学习", "怎么学习", "解释一下", "区别是什么", "为什么")):
+    if is_save_followup(raw) or not is_coding_request(raw):
         return None
-    generation_words = ("写一个", "写一份", "帮我写", "请写", "编写", "生成一个", "生成一份",
-                        "创建一个", "创建一份", "开发一个", "实现一个", "保存代码", "保存到桌面",
-                        "保存到桌面上", "保存到本地", "保存下来", "直接保存", "修改并保存",
-                        "写入文件", "放到桌面", "存到桌面", "把代码保存", "将代码保存")
-    python_words = ("python", "程序", "脚本", "代码", ".py")
-    if not any(word in text.lower() for word in generation_words):
-        return None
-    if not any(word in text.lower() for word in python_words):
-        return None
-    matches = re.findall(r"(?<![\w])([A-Za-z0-9_\-\u4e00-\u9fff./\\]+\.py)(?![\w])", text, flags=re.I)
-    filename = matches[0].rstrip("。！，,；;：:") if matches else "generated_program.py"
-    if "桌面" in text:
-        destination = DESKTOP / filename
+    filename = named_file(raw)
+    if filename:
+        destination = target_path(str(DESKTOP / filename) if '桌面' in raw else filename)
     else:
-        destination = target_path(filename) if matches else safe_path(filename)
-    return destination, text
+        destination = new_default_path(DESKTOP if '桌面' in raw else ROOT, raw)
+    return destination, raw.strip()
+
+
+def save_previous_code(raw, code, previous_path=None):
+    """Save the selected source unchanged, without asking the model to invent a task."""
+    from code_quality import validation_error
+    if not code:
+        raise ValueError('当前窗口还没有可保存的代码。请先输入完整题目，例如：用turtle库绘制五角星。')
+    filename = named_file(raw)
+    if filename:
+        path = target_path(str(DESKTOP / filename) if '桌面' in raw else filename)
+    elif '桌面' in raw:
+        path = DESKTOP / (Path(previous_path).name if previous_path else 'generated_program.py')
+    elif previous_path:
+        path = Path(previous_path)
+    else:
+        path = new_default_path(ROOT, 'Python 程序')
+    expected = snapshot(path)
+    # Reflect edits already made in the external editor.
+    if previous_path and Path(previous_path).is_file():
+        code = read_text(Path(previous_path))
+    error = validation_error(code, path)
+    if error:
+        raise ValueError(f'上一段代码检查未通过，请补全或修复后保存：\n{error}')
+    save_source(path, code, expected)
+    print(f'已保存上一段 Python 源码：{path}')
+    print(f'/run "{path}"')
+    return path, code
 
 
 def natural_image_request(raw: str) -> tuple[Path, Path, str] | None:
@@ -404,6 +424,9 @@ def save_image_question(image_path: Path, output: Path, task: str) -> None:
 
 
 def save_generated_file(path: Path, task: str, old: str = "") -> None:
+    if path.suffix.lower() != '.py':
+        raise ValueError('Python 源码文件名必须以 .py 结尾')
+    expected = snapshot(path)
     prompt = (f"请为文件 {path.name} 根据以下需求生成完整 Python 程序：\n{task}\n"
               "只输出完整、可运行的 Python 源码，不要 Markdown 代码围栏。\n"
               "先在脑中检查输入校验、边界条件、异常处理和依赖，再输出代码。\n"
@@ -413,34 +436,20 @@ def save_generated_file(path: Path, task: str, old: str = "") -> None:
               "除非用户明确要求这些功能。文件保存由宿主助手完成，你只需要实现题目功能。代码结构按任务和风格偏好决定；不要声称访问了互联网。\n"
               "科研代码要固定随机种子、避免数据泄漏、清楚划分训练/验证/测试集，报告关键指标，并记录配置；缺少数据时使用清晰的占位路径并说明。\n"
               "优先使用标准库和当前环境已有依赖；如果必须新增依赖，在代码注释中写明包名和安装命令。")
-    result = code_only(ask(prompt, system, style_examples=True))
-    result = code_only(ask("逐条复核题目约束、算法、输入校验、边界和输出格式；修正错误，只输出完整Python源码。不要声称执行过代码。\n题目：" + task + "\n候选源码：" + result, system, style_examples=True))
+    try:
+        result = generate_checked_source(lambda prompt, system: ask(prompt, system, style_examples=True),
+                                         prompt, task, system, path)
+    except GenerationError as exc:
+        diagnostic = path.with_suffix(path.suffix + ".failed.txt")
+        atomic_write(diagnostic, f"检查未通过：\n{exc}\n\n{exc.code}")
+        raise ValueError(f"代码检查仍未通过，未生成或覆盖 {path.name}。详情：{diagnostic}\n{exc}") from exc
     if any(ord(ch) > 127 for ch in result) and "coding" not in result.splitlines()[0].lower():
         result = "# -*- coding: utf-8 -*-\n" + result
-    if path.exists():
-        path.with_suffix(path.suffix + ".bak").write_bytes(path.read_bytes())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(result, encoding="utf-8")
-
-    # 先由本机 Python 编译器检查；若模型输出有语法错误，自动修复一次。
-    error = syntax_error(path)
-    if error:
-        repair_prompt = (f"请修复文件 {path.name} 的 Python 语法错误。只输出修复后的完整源码，\n"
-                         f"不要 Markdown 代码围栏，也不要改动与错误无关的功能。\n"
-                         f"py_compile 错误信息：\n{error}\n\n当前源码：\n{result}")
-        repaired = code_only(ask(repair_prompt, system, style_examples=True))
-        if any(ord(ch) > 127 for ch in repaired) and "coding" not in repaired.splitlines()[0].lower():
-            repaired = "# -*- coding: utf-8 -*-\n" + repaired
-        path.write_text(repaired, encoding="utf-8")
-        second_error = syntax_error(path)
-        if second_error:
-            print(f"文件已保存，但自动修复后仍有语法错误：{second_error}")
-        else:
-            result = repaired
-            print("已自动检查并修复 Python 语法错误。")
-    else:
-        print("已通过 Python 语法检查。")
-    print(f"已根据自然语言保存到：{path_label(path)}" + ("（旧文件备份为 .bak）" if old else ""))
+    existed = expected is not None
+    save_source(path, result, expected)
+    path.with_suffix(path.suffix + '.failed.txt').unlink(missing_ok=True)
+    print("已通过语法、未定义名称和依赖检查（未执行程序）。")
+    print(f"已根据自然语言保存到：{path_label(path)}" + ("（旧文件备份为 .bak）" if existed else ""))
 
 
 def main() -> int:
@@ -450,6 +459,8 @@ def main() -> int:
     print("代码风格：默认使用已配置的规则和本地示例。输入“查看我的代码风格”可查看规则。")
     print("输入 /help 查看命令。首次响应可能需要加载模型。")
     context = ""
+    last_code = ""
+    last_path = None
     system = ("你是离线 Python 编程助手，擅长工程代码、机器学习和深度学习科研代码。用户要的是目标程序本身，不是一个生成器。使用中文回答。\n"
               "当用户要求写/生成 Python 程序时，给出直接完成任务的完整源码；保存由宿主助手负责，不生成仅用于写入这些源码的包装程序。\n"
               "不要调用 Ollama、AI API 或再次生成代码，除非用户明确要求。\n"
@@ -467,6 +478,10 @@ def main() -> int:
             return 0
         if raw == "/help":
             show_help(); continue
+        if raw in ('/new', '开始新对话', '清空上下文'):
+            context, last_code, last_path = '', '', None
+            print('已清空当前窗口的代码上下文。')
+            continue
         if handle_style_request(raw):
             continue
         if raw == "/model":
@@ -481,6 +496,9 @@ def main() -> int:
             else:
                 print("可选模型：/model 3b、/model 7b、/model 14b、/model auto")
             continue
+        if raw in ("/libs", "/库", "查看考试库"):
+            print_libraries()
+            continue
         if raw == "/files":
             for p in sorted(ROOT.rglob("*.py")):
                 if ".git" not in p.parts and "__pycache__" not in p.parts:
@@ -488,16 +506,40 @@ def main() -> int:
             continue
         try:
             parts = raw.split(maxsplit=2)
+            if parts[0] in ('/read', '/run', '/write', '/生成', '/创建', '/保存', '/fix', '/review', '/check'):
+                if len(parts) < 2:
+                    raise ValueError('请提供 .py 文件路径，例如：/check "题目_源码/01_answer.py"')
+                filename, remainder = first_argument(raw[len(parts[0]):])
+                parts = [parts[0], filename, remainder]
             if parts[0] == "/read" and len(parts) >= 2:
-                p = safe_path(parts[1]); context = read_text(p)
+                p = target_path(parts[1]); context = read_text(p)
+                last_code, last_path = context, p
                 print(context); continue
+            if parts[0] == '/check':
+                from code_quality import validation_error
+                p = target_path(parts[1])
+                error = validation_error(read_text(p), p)
+                print('检查未通过：\n' + error if error else '语法、未定义名称和依赖检查通过（未执行，不代表逻辑全对）。')
+                continue
             if parts[0] == "/run" and len(parts) >= 2:
-                p = safe_path(parts[1]); args = parts[2].split() if len(parts) == 3 else []
-                result = subprocess.run([sys.executable, str(p), *args], cwd=ROOT,
-                                         capture_output=True, text=True, timeout=120)
-                print(result.stdout, end="")
-                if result.stderr: print(result.stderr, end="", file=sys.stderr)
-                print(f"\n退出码: {result.returncode}"); continue
+                arguments = argument_list(parts[2])
+                p = target_path(parts[1])
+                if not p.is_file():
+                    raise FileNotFoundError(f"找不到程序：{p}")
+                if p.suffix.lower() != '.py':
+                    raise ValueError('/run 需要指定 .py 源码文件')
+                from code_quality import validation_error
+                error = validation_error(read_text(p), p)
+                if error:
+                    raise ValueError(f'运行前检查未通过：\n{error}\n请修改源码或使用 /fix "{parts[1]}" 修复')
+                print(f"正在运行：{p.name}（结束或关闭图形窗口后返回助手）", flush=True)
+                try:
+                    result = subprocess.run([sys.executable, "-u", str(p), *arguments], cwd=p.parent)
+                except KeyboardInterrupt:
+                    print("\n程序已中断。")
+                else:
+                    print(f"\n退出码: {result.returncode}")
+                continue
             if parts[0] in ("/write", "/生成", "/创建", "/保存", "/fix") and len(parts) >= 2:
                 p = target_path(parts[1]); request = parts[2] if len(parts) == 3 else ""
                 old = read_text(p) if p.exists() else ""
@@ -505,19 +547,30 @@ def main() -> int:
                 if is_fix and not old:
                     print("文件不存在，无法修复"); continue
                 task = request or ("修复所有问题" if is_fix else "根据需求生成一个完整程序")
-                save_generated_file(p, task, old); continue
+                save_generated_file(p, task, old)
+                if p.is_file():
+                    last_code, last_path = read_text(p), p
+                continue
             if parts[0] == "/review" and len(parts) >= 2:
-                p = safe_path(parts[1]); print(ask(f"请审查以下 Python 文件并给出具体修改建议：\n{read_text(p)}", system)); continue
+                p = target_path(parts[1]); print(ask(f"请审查以下 Python 文件并给出具体修改建议：\n{read_text(p)}", system)); continue
             if parts[0] == "/文档" and len(parts) >= 2:
-                p = safe_path(parts[1]); instruction = parts[2] if len(parts) == 3 else "完成文档中的题目并给出答案"
+                document = natural_document_request(raw)
+                if document is None:
+                    raise ValueError('请输入文档路径，例如：/文档 "C:\\题目\\实验二.pdf" 完成题目')
+                p, instruction = document
                 save_document_result(p, instruction); continue
         except Exception as exc:
             print(f"操作失败: {exc}"); continue
         try:
+            if is_save_followup(raw):
+                last_path, last_code = save_previous_code(raw, last_code, last_path)
+                continue
             image_request = natural_image_request(raw)
             if image_request:
                 image_path, output, instruction = image_request
                 save_image_question(image_path, output, instruction)
+                if output.is_file():
+                    last_code, last_path = read_text(output), output
                 continue
             document = natural_document_request(raw)
             if document:
@@ -528,12 +581,22 @@ def main() -> int:
             if natural:
                 path, task = natural
                 save_generated_file(path, task, read_text(path) if path.exists() else "")
+                if path.is_file():
+                    last_code, last_path = read_text(path), path
                 continue
         except Exception as exc:
             print(f"自然语言保存失败: {exc}"); continue
         prompt = raw + (f"\n参考当前文件内容：\n{context}" if context else "")
         try:
-            print("\nAI> " + ask(prompt, system))
+            answer = ask(prompt, system)
+            print("\nAI> " + answer)
+            if re.search(r'(?m)^\s*```(?:python|py|python3)\s*$', answer, re.I):
+                from code_quality import ExtractionError
+                try:
+                    last_code = code_only(answer)
+                    last_path = None
+                except ExtractionError:
+                    last_code, last_path = '', None
         except Exception as exc:
             print(f"连接本地模型失败: {exc}\n请确认 Ollama 正在运行。")
 
