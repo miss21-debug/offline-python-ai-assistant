@@ -18,6 +18,7 @@ from generation_pipeline import GenerationError, generate_checked_source
 from model_transport import request_chat
 from command_arguments import first_argument, argument_list
 from natural_codegen import is_coding_request, is_save_followup, named_file, new_default_path
+from assistant_knowledge import knowledge_for_prompt, handle_knowledge_request
 
 # Windows 命令行默认可能使用 GBK；强制使用 UTF-8，避免中文显示乱码。
 if os.name == "nt":
@@ -198,6 +199,9 @@ def model_mode_description() -> str:
 
 def ask(prompt: str, system: str = "", model: str | None = None, *, style_examples: bool = False) -> str:
     selected_model = model or choose_model(prompt, system)
+    knowledge = knowledge_for_prompt(prompt)
+    if knowledge:
+        system = (system + "\n\n" + knowledge).strip()
     runtime_note = environment_prompt()
     if runtime_note:
         system = (system + "\n\n" + runtime_note).strip()
@@ -272,6 +276,8 @@ def show_help() -> None:
   /run 文件.py [参数...]     用当前 Python 运行文件
   /check "文件.py"          不运行程序，检查语法、未定义名称和依赖
   /libs                      显示考试库版本和运行解释器
+  /知识库 [关键词]           列出本地知识，或查看奥运五环等条目
+  /knowledge [关键词]        同上；编辑 knowledge/*.json 后自动读取
   /new                       清空当前窗口的代码上下文
   /files                     列出项目中的 Python 文件
   /model                    显示模型模式和当前选择结果
@@ -457,6 +463,7 @@ def main() -> int:
     print(f"本地 Python AI 助手 | 模型模式: {model_mode_description()}")
     print(f"项目目录: {ROOT}")
     print("代码风格：默认使用已配置的规则和本地示例。输入“查看我的代码风格”可查看规则。")
+    print("本地知识库已启用。输入 /知识库 查看；可直接说“用turtle画奥运五环”。")
     print("输入 /help 查看命令。首次响应可能需要加载模型。")
     context = ""
     last_code = ""
@@ -505,6 +512,8 @@ def main() -> int:
                     print(p.relative_to(ROOT))
             continue
         try:
+            if handle_knowledge_request(raw):
+                continue
             parts = raw.split(maxsplit=2)
             if parts[0] in ('/read', '/run', '/write', '/生成', '/创建', '/保存', '/fix', '/review', '/check'):
                 if len(parts) < 2:

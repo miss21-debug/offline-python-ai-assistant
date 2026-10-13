@@ -1,0 +1,133 @@
+[
+  {
+    "title": "奥运五环：形状与绘图",
+    "kind": "drawing",
+    "filename": "olympic_rings.py",
+    "keywords": [
+      "奥运五环",
+      "奧運五環",
+      "奥林匹克五环",
+      "奧林匹克五環",
+      "奥运五坏",
+      "奧運五壞",
+      "奥运五環",
+      "五环标志",
+      "五環標誌",
+      "olympic rings"
+    ],
+    "content": "奥运五环是五个大小相同、线宽相同、内部空心、彼此相扣的圆环。彩色版本通常为白背景；从左到右，上排为蓝、黑、红，下排为黄、绿。黄在蓝与黑之间的下方，绿在黑与红之间的下方。同排圆环分开，不能五环并排或填成实心圆。五种颜色不各自固定代表某个大洲。用户明确要求改色等变体时按要求调整。\n下例为经过几何计算的教学用turtle绘图方案（近似坐标，不是官方制图规格）。可据此生成独立程序，其他库须转换坐标/API。相扣四对蓝-黄、黄-黑、黑-绿、绿-红，每对有两个交点；较高交点由上排环覆盖，较低由下排环覆盖，交替呈现穿插。所有圆都为空心，完全不需要begin_fill/end_fill。绘制重叠处的白底弧和彩色弧必须复用同一圆心、起始角和角度范围，不能接着往前画另一段弧。函数中setheading不可省略。\nimport turtle\nimport math\nscreen = turtle.Screen()\nscreen.bgcolor(\"white\")\nscreen.tracer(0)\npen = turtle.Turtle()\npen.hideturtle()\nr = 52\nwidth = 8\nrings = [(-120, 40, \"blue\"), (0, 40, \"black\"), (120, 40, \"red\"), (-60, -20, \"yellow\"), (60, -20, \"green\")]\ndef arc(cx, cy, color, start, extent, size):\n    a = math.radians(start)\n    pen.penup()\n    pen.goto(cx + r * math.cos(a), cy + r * math.sin(a))\n    pen.setheading(start + 90)\n    pen.pencolor(color)\n    pen.pensize(size)\n    pen.pendown()\n    pen.circle(r, extent, steps=max(12, int(extent)))\nfor cx, cy, color in rings:\n    arc(cx, cy, color, 0, 360, width)\nfor top, bottom in [(0, 3), (1, 3), (1, 4), (2, 4)]:\n    x1, y1, c1 = rings[top]\n    x2, y2, c2 = rings[bottom]\n    dx, dy = x2 - x1, y2 - y1\n    d = math.hypot(dx, dy)\n    h = math.sqrt(r * r - d * d / 4)\n    mx, my = (x1 + x2) / 2, (y1 + y2) / 2\n    points = [(mx - dy / d * h, my + dx / d * h), (mx + dy / d * h, my - dx / d * h)]\n    points.sort(key=lambda p: p[1], reverse=True)\n    for (ix, iy), ring in zip(points, (rings[top], rings[bottom])):\n        cx, cy, color = ring\n        angle = math.degrees(math.atan2(iy - cy, ix - cx))\n        arc(cx, cy, \"white\", angle - 12, 24, width + 4)\n        arc(cx, cy, color, angle - 12, 24, width)\nscreen.update()\nturtle.done()",
+    "source": "国际奥委会 Olympic rings：https://olympics.com/ioc/olympic-rings （形状和颜色资料；教学坐标及绘图算法为本项目编写）"
+  },
+  {
+    "title": "正五角星",
+    "kind": "drawing",
+    "filename": "five_pointed_star.py",
+    "keywords": [
+      "五角星",
+      "五芒星",
+      "five-pointed star"
+    ],
+    "content": "正五角星有五个尖角，常见朝向是一角向上。画交叉线五角星时重复前进并转144度共5次。要填充实心五角星且避免中心出现空洞，使用十个顶点交替取外半径R和内半径R*sin(18度)/sin(54度)，约为0.381966R；第一个外顶点从90度开始，每次递增36度，首尾闭合后填充。三角函数使用弧度。"
+  },
+  {
+    "title": "常见竖式机动车红绿灯",
+    "kind": "drawing",
+    "filename": "traffic_light.py",
+    "keywords": [
+      "红绿灯",
+      "紅綠燈",
+      "交通信号灯",
+      "traffic light"
+    ],
+    "content": "常见竖式三灯机动车信号灯在同一深色外壳内由上到下排列红、黄、绿三个等大圆灯。红色通常表示停止，绿色表示通行，黄色表示警示或过渡。若画静态结构示意可以显示三种颜色；若模拟工作状态，避免默认三灯同时亮。箭头灯、横式灯和不同地区规则应按题目给定。"
+  },
+  {
+    "title": "美国队长经典圆盾",
+    "kind": "drawing",
+    "filename": "captain_shield.py",
+    "keywords": [
+      "美国队长盾牌",
+      "美國隊長盾牌",
+      "美国队长的盾",
+      "美國隊長的盾",
+      "captain america shield"
+    ],
+    "content": "常见经典圆盾是同心圆图案，外向内为红色外环、白色环、红色环、蓝色中心圆盘，蓝盘中央是一颗白色正五角星、一角向上。不是整面美国国旗，也不是十三颗星。可从外到内依次绘制越来越小的实心圆，再画居中的实心五角星；具体版本有差异，题目给图时以参考图为准。"
+  },
+  {
+    "title": "turtle 圆心、填充与窗口",
+    "kind": "library",
+    "keywords": [
+      "turtle",
+      "海龟绘图",
+      "海龜繪圖"
+    ],
+    "content": "turtle默认原点位于窗口中心，x向右、y向上，初始朝向右。circle(r)的圆心在海龟左侧r处，因此在(cx,cy-r)设置朝向0再circle(r)，才能得到圆心(cx,cy)的圆。每次跳转前penup，定位后pendown；填充使用begin_fill/end_fill；画空心环只设pencolor和pensize。角度接口用度，math三角函数用弧度。hideturtle隐藏笔头，tracer(0)加update加速，done或mainloop保持窗口。Screen没有screenshot方法；导出图片需要另外选择画布导出方式。",
+    "source": "https://docs.python.org/3/library/turtle.html"
+  },
+  {
+    "title": "NumPy 数组和统计",
+    "kind": "library",
+    "keywords": [
+      "numpy",
+      "np.mean",
+      "np.array"
+    ],
+    "content": "import numpy as np。数组a*b为逐元素相乘，矩阵乘法用a@b，注意形状和广播条件。二维数组axis=0沿行方向聚合得到各列统计，axis=1得到各行统计。np.std默认ddof=0为总体标准差，样本标准差通常用ddof=1且样本数量至少为2。随机演示需要复现时使用np.random.default_rng(seed)。空数组平均值无定义，不应把NaN当正常答案。",
+    "source": "https://numpy.org/doc/stable/"
+  },
+  {
+    "title": "pandas 表格读取和索引",
+    "kind": "library",
+    "keywords": [
+      "pandas",
+      "dataframe",
+      "pd.read_csv"
+    ],
+    "content": "import pandas as pd。CSV用read_csv读取，列名、分隔符和编码应以实际文件为准，不能假装知道用户数据。loc按标签、iloc按位置索引；条件筛选用&或|并为每个条件加括号。缺失值用isna判断，不能用==np.nan。更新筛选行用df.loc[mask,列名]=值，避免链式赋值。导出CSV通常index=False。Excel读写可能需要openpyxl等额外引擎，安装pandas并不保证已有引擎。",
+    "source": "https://pandas.pydata.org/docs/"
+  },
+  {
+    "title": "matplotlib 绘图比例和中文",
+    "kind": "library",
+    "keywords": [
+      "matplotlib",
+      "pyplot",
+      "plt.plot"
+    ],
+    "content": "常用import matplotlib.pyplot as plt。圆和几何图案应设置ax.set_aspect('equal')，否则窗口纵横比例可能把圆拉成椭圆。普通折线图数据x和y长度须一致。Windows中文可配置字体族SimHei和axes.unicode_minus=False，不能将字体文件路径直接当作字体族名。导出使用fig.savefig，交互显示用plt.show。保存应在关闭图形前进行。",
+    "source": "https://matplotlib.org/stable/users/index.html"
+  },
+  {
+    "title": "jieba 中文分词",
+    "kind": "library",
+    "keywords": [
+      "jieba",
+      "中文分词",
+      "中文分詞"
+    ],
+    "content": "jieba.cut返回迭代器，jieba.lcut返回列表。中文分词不是逐字符拆分。统计高频词时按题目过滤空白、标点和停用词，不要默认把所有单字删除。专有名词可以jieba.add_word加入。分词结果用于词云时可用空格连接，词频可交给collections.Counter。",
+    "source": "https://github.com/fxsjy/jieba"
+  },
+  {
+    "title": "中文词云",
+    "kind": "library",
+    "keywords": [
+      "wordcloud",
+      "词云",
+      "詞雲"
+    ],
+    "content": "from wordcloud import WordCloud。中文文本通常先用jieba分词；用generate时以空格连接词，或用generate_from_frequencies传入非空正词频字典。中文font_path需要真实字体文件，例如Windows的C:/Windows/Fonts/simhei.ttf；SimHei这种字体族名不能直接作为font_path。过滤后没有词应明确提示，不能生成空词云。mask中纯白区域通常排除绘制。",
+    "source": "https://amueller.github.io/word_cloud/"
+  },
+  {
+    "title": "OpenCV 图像颜色与读写",
+    "kind": "library",
+    "keywords": [
+      "opencv",
+      "cv2"
+    ],
+    "content": "安装包通常叫opencv-python，导入名是cv2。cv2.imread读取失败返回None，应先检查再使用shape或cvtColor。常见彩色图像是BGR通道顺序，matplotlib显示前用cv2.cvtColor(image,cv2.COLOR_BGR2RGB)。灰度图shape只有高和宽，不要假定三通道。OpenCV图像坐标原点在左上角，x向右、y向下，不能直接照搬turtle的y向上坐标。imshow后需waitKey处理窗口事件，最后destroyAllWindows。",
+    "source": "https://docs.opencv.org/4.x/"
+  }
+]

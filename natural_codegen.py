@@ -1,11 +1,16 @@
 """Recognize concrete coding requests and save-only follow-ups locally."""
 import re
 from pathlib import Path
+from assistant_knowledge import drawing_entry
 
 LIBRARIES = r'(?<![A-Za-z0-9_])(?:turtle|numpy|pandas|matplotlib|jieba|wordcloud|opencv|cv2|python)(?![A-Za-z0-9_])'
 ACTION = r'绘制|绘图|画|生成|计算|统计|读取|处理|分析|分词|排序|识别|转换|实现|写|编写|创建|保存|输出'
-QUESTION = r'为什么|为何|什么是|是什么|怎么(?:用|使用|安装|调用)|如何|解释|介绍|区别|能不能|可以吗'
+QUESTION = r'为什么|为何|什么|怎么|怎样|如何|解释|介绍|区别|能不能|可以吗|為什麼|什麼|怎麼|怎樣|解釋|介紹'
 FILE_NAME = r'(?:[A-Za-z0-9_\-\u4e00-\u9fff]+\.py)'
+
+
+def is_drawing_request(text):
+    return bool(re.search(r'绘制|绘图|画|繪製|繪圖|畫|\bdraw\b', text, re.I) and drawing_entry(text))
 
 
 def named_file(text):
@@ -32,6 +37,8 @@ def is_save_followup(text):
     has_save = re.search(r'保存|存到|放到|写入|生成.*(?:py|python|源码|代码).*文件|给我.*(?:py|python|源码).*文件', compact)
     if not has_save:
         return False
+    if is_drawing_request(compact):
+        return False
     if re.search(r'写一个|写一份|帮我写|请写|编写|实现|创建|开发', compact):
         return False
     # A full task such as "保存用turtle画星星的代码" still needs generation.
@@ -45,6 +52,8 @@ def is_save_followup(text):
 def is_coding_request(text):
     if re.search(r'不要(?:生成|保存)|只(?:解释|说明)|' + QUESTION, text, re.I):
         return False
+    if is_drawing_request(text):
+        return True
     if re.search(LIBRARIES, text, re.I) and re.search(ACTION, text):
         return True
     return bool(re.search(r'写|编写|生成|创建|实现|开发|保存|存到', text) and
@@ -53,7 +62,10 @@ def is_coding_request(text):
 
 def new_default_path(root, task):
     lower = task.lower()
-    if 'turtle' in lower:
+    drawing = drawing_entry(task)
+    if drawing and drawing.filename and not ('turtle' in lower and re.search('五角星|星星', task)):
+        stem = Path(drawing.filename).stem
+    elif 'turtle' in lower:
         stem = 'turtle_star' if re.search('五角星|星星', task) else 'turtle_drawing'
     else:
         module = re.search(LIBRARIES, lower)

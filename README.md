@@ -89,6 +89,14 @@ ollama pull qwen2.5vl:3b
 - [科研提示词模板](科研研究提示词模板.md)
 - 运行 `python work/create_manual_docx.py` 在桌面生成 Word 说明书。
 
+## 本地基础知识库
+
+内置奥运五环、五角星、红绿灯、经典圆盾及 turtle、NumPy、pandas、matplotlib、jieba、wordcloud、OpenCV 基础资料。提问时自动检索，生成和复核使用同一份相关知识；无需联网或额外模型。
+
+输入 `/知识库` 列出条目，`/知识库 奥运五环` 查看内容。直接输入“用turtle画一个奥运五环，生成py文件给我”会生成 `.py`；也识别“奥运五坏”笔误。未指定库的已知图案绘制请求同样可直接保存源码。
+
+编辑 [knowledge/common.json](knowledge/common.json) 或新增 JSON 即可扩充，下一次任务自动读取；格式、限制和示例见 [知识库说明](knowledge/README.md)。每次最多注入 3 条、2500 字符，英文采用单词边界，中文采用关键词匹配。知识库帮助减少常识错误，不等于全面的图像识别或正确性保证。
+
 ## 验证
 
 以下测试不需要联网或个人风格文件：
